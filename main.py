@@ -23,7 +23,7 @@ dp = Dispatcher(storage=MemoryStorage())
 
 # Google Gemini sozlamasi
 genai.configure(api_key=GEMINI_API_KEY)
-ai_model = genai.GenerativeModel('gemini-1.5-flash')
+ai_model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 class QuyonQoshishFSM(StatesGroup):
     nom = State()
