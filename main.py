@@ -15,7 +15,7 @@ import google.generativeai as genai
 
 # --- SOZLAMALAR ---
 BOT_TOKEN = "8863745035:AAE8g1tqu8VFzP4EuHhb-wtoRkzdqaFcQKs"
-GEMINI_API_KEY = "AQ.Ab8RN6KTAwe3c-Zal528E28mJR7W7QVCDxMhCcQqowo54lCx1Q"
+GEMINI_API_KEY = "AQ.Ab8RN6Krz4oeWkqqC1Rf1SKaWEBakHtZRQqZe8uR05JDsH_04w"
 DB_FILE = "quyonlar.db"
 
 bot = Bot(token=BOT_TOKEN)
