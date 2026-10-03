@@ -23,7 +23,7 @@ dp = Dispatcher(storage=MemoryStorage())
 
 # Google Gemini sozlamasi
 genai.configure(api_key=GEMINI_API_KEY)
-ai_model = genai.GenerativeModel('gemini-3.8-flash')
+ai_model = genai.GenerativeModel('gemini-1.5-flash')
 
 class QuyonQoshishFSM(StatesGroup):
     nom = State()
@@ -41,9 +41,6 @@ class RasxodFSM(StatesGroup):
 class QuyonSotishFSM(StatesGroup):
     quyon_id = State()
     summa = State()
-
-class QuyonOlimFSM(StatesGroup):
-    quyon_id = State()
 
 class AIVeterinarFSM(StatesGroup):
     savol = State()
@@ -142,45 +139,116 @@ async def bekor_qilish(message: types.Message, state: FSMContext):
 @dp.message(Command("start"), StateFilter("*"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("Assalomu alaykum! 🐰 Quyon fermasi tizimi ishga tushdi.", reply_markup=asosiy_menyu())
+    await message.answer("Assalomu alaykum! 🐰 Quyon fermasi tizimi online serverda ishlamoqda.", reply_markup=asosiy_menyu())
 
+# --- 1. AI MASLAHATCHI ---
 @dp.message(F.text.contains("AI Maslahatchi"), StateFilter("*"))
 async def start_ai_maslahat(message: types.Message, state: FSMContext):
     await state.clear()
     await state.set_state(AIVeterinarFSM.savol)
-    matn = "🤖 **Google Gemini Quyonchilik Maslahatchisi**\n\nSavolingizni yozing yoki quyonning rasmini yuboring:"
+    matn = "🤖 **Google Gemini Quyonchilik Maslahatchisi**\n\nSavolingizni yozing yoki quyon rasmini yuboring:"
     await message.answer(matn, reply_markup=bekor_qilish_knopka(), parse_mode="Markdown")
 
 @dp.message(AIVeterinarFSM.savol, F.photo)
 async def ai_savol_rasm(message: types.Message, state: FSMContext):
     await message.answer("⏳ Rasm tahlil qilinmoqda...")
-    photo = message.photo[-1]
-    file_info = await bot.get_file(photo.file_id)
-    file_bytes = await bot.download_file(file_info.file_path)
-    img_data = file_bytes.read()
-
-    izoh = message.caption or "Ushbu quyon holatini tahlil qilib, davolash bo'yicha maslahat bering."
-    prompt = f"Sen quyonchilik veterinari mutaxassisissan. Aniq va amaliy tavsiya ber: {izoh}"
     try:
-        image_part = {"mime_type": "image/jpeg", "data": img_data}
+        photo = message.photo[-1]
+        file_io = io.BytesIO()
+        await bot.download(photo, destination=file_io)
+        img_bytes = file_io.getvalue()
+
+        izoh = message.caption or "Ushbu quyonning sog'lig'i va holatini tahlil qilib, amaliy tavsiya ber."
+        prompt = f"Sen quyonchilik bo'yicha tajribali veterinar mutaxassisissan. Qisqa, tushunarli va amaliy davolash/parvarish tavsiyasini ber: {izoh}"
+        
+        image_part = {"mime_type": "image/jpeg", "data": img_bytes}
         response = ai_model.generate_content([prompt, image_part])
-        await message.answer(f"🤖 **Maslahat:**\n\n{response.text}", reply_markup=asosiy_menyu(), parse_mode="Markdown")
+        await message.answer(f"🤖 **Maslahat:**\n\n{response.text}", reply_markup=asosiy_menyu())
     except Exception as e:
-        await message.answer(f"Xatolik: {str(e)}", reply_markup=asosiy_menyu())
+        await message.answer(f"❌ Xatolik yuz berdi: {str(e)}", reply_markup=asosiy_menyu())
     await state.clear()
 
 @dp.message(AIVeterinarFSM.savol, F.text)
 async def ai_savol_matn(message: types.Message, state: FSMContext):
     savol = message.text.strip()
     await message.answer("⏳ Javob tayyorlanmoqda...")
-    prompt = f"Sen quyonchilik veterinari mutaxassisissan. O'zbekistondagi fermerga aniq maslahat ber: {savol}"
+    prompt = f"Sen quyonchilik bo'yicha tajribali veterinar mutaxassisissan. O'zbekistondagi iqlim va sharoitni hisobga olib, quyidagi savolga amaliy va aniq tavsiya ber: {savol}"
     try:
         response = ai_model.generate_content(prompt)
-        await message.answer(f"🤖 **Maslahat:**\n\n{response.text}", reply_markup=asosiy_menyu(), parse_mode="Markdown")
+        await message.answer(f"🤖 **Maslahat:**\n\n{response.text}", reply_markup=asosiy_menyu())
     except Exception as e:
-        await message.answer(f"Xatolik: {str(e)}", reply_markup=asosiy_menyu())
+        await message.answer(f"❌ Xatolik yuz berdi: {str(e)}", reply_markup=asosiy_menyu())
     await state.clear()
 
+# --- 2. SOTISH BO'LIMI ---
+@dp.message(F.text == "💰 Sotish", StateFilter("*"))
+async def start_sotish(message: types.Message, state: FSMContext):
+    await state.clear()
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, nom, zot FROM quyonlar WHERE holati = 'tirik' OR holati IS NULL")
+    rows = c.fetchall()
+    conn.close()
+
+    if not rows:
+        await message.answer("Sotish uchun tirik quyon topilmadi.", reply_markup=asosiy_menyu())
+        return
+
+    royxat_matni = "\n".join([f"• `{r[0]}` — {r[1]} ({r[2]})" for r in rows[:20]])
+    await state.set_state(QuyonSotishFSM.quyon_id)
+    await message.answer(
+        f"💰 **Quyon sotish**\n\nMavjud quyonlar:\n{royxat_matni}\n\nSotilgan quyonning **ID raqamini** yozing (masalan: `Q-001`):",
+        reply_markup=bekor_qilish_knopka(),
+        parse_mode="Markdown"
+    )
+
+@dp.message(QuyonSotishFSM.quyon_id)
+async def sotish_id(message: types.Message, state: FSMContext):
+    q_id = message.text.strip().upper()
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, nom FROM quyonlar WHERE UPPER(id) = ? AND (holati = 'tirik' OR holati IS NULL)", (q_id,))
+    quyon = c.fetchone()
+    conn.close()
+
+    if not quyon:
+        await message.answer("Bunday ID li tirik quyon topilmadi. Qaytadan kiriting (yoki Bekor qilishni bosing):")
+        return
+
+    await state.update_data(quyon_id=quyon[0], quyon_nom=quyon[1])
+    await state.set_state(QuyonSotishFSM.summa)
+    await message.answer(f"🐰 Tanlandi: **{quyon[1]}** (`{quyon[0]}`).\n\nNecha pulga sotildi? (summani so'mda kiriting):", reply_markup=bekor_qilish_knopka(), parse_mode="Markdown")
+
+@dp.message(QuyonSotishFSM.summa)
+async def sotish_summa(message: types.Message, state: FSMContext):
+    try:
+        summa = float(message.text.strip().replace(" ", "").replace(",", ""))
+    except ValueError:
+        await message.answer("Summani raqamda kiriting:")
+        return
+
+    data = await state.get_data()
+    q_id = data['quyon_id']
+    bugun_sana = datetime.now().strftime("%Y-%m-%d")
+
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        UPDATE quyonlar 
+        SET holati = 'sotilgan', sotilganSana = ?, sotilganSumma = ?
+        WHERE id = ?
+    ''', (bugun_sana, summa, q_id))
+    conn.commit()
+    conn.close()
+
+    await state.clear()
+    await message.answer(
+        f"✅ Muvaffaqiyatli sotildi!\n🐰 Quyon: {data['quyon_nom']} (`{q_id}`)\n💵 Sotilgan summa: {summa:,.0f} so'm",
+        reply_markup=asosiy_menyu(),
+        parse_mode="Markdown"
+    )
+
+# --- 3. QUYON QO'SHISH ---
 @dp.message(F.text == "➕ Quyon", StateFilter("*"))
 async def start_quyon_qoshish(message: types.Message, state: FSMContext):
     await state.clear()
@@ -198,7 +266,7 @@ async def qoshish_zot(message: types.Message, state: FSMContext):
     matn = message.text.strip()
     if "Yangi zot yozish" in matn:
         await state.set_state(QuyonQoshishFSM.yangi_zot_nomi)
-        await message.answer("✍️ Yangi zot nomini yozing:", reply_markup=bekor_qilish_knopka())
+        await message.answer("✍️️ Yangi zot nomini yozing:", reply_markup=bekor_qilish_knopka())
         return
     await state.update_data(zot=matn)
     await state.set_state(QuyonQoshishFSM.jinsi)
@@ -247,6 +315,7 @@ async def qoshish_narx(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(f"✅ Saqlandi! ID: `{yangi_id}` | Laqabi: {data['nom']}", reply_markup=asosiy_menyu(), parse_mode="Markdown")
 
+# --- 4. RASXOD ---
 @dp.message(F.text == "💸 Rasxod", StateFilter("*"))
 async def start_rasxod(message: types.Message, state: FSMContext):
     await state.clear()
@@ -285,6 +354,7 @@ async def rasxod_summa(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(f"✅ Xarajat saqlandi: {summa:,.0f} so'm", reply_markup=asosiy_menyu())
 
+# --- 5. KASSA VA RO'YXAT ---
 @dp.message(F.text == "📊 Kassa", StateFilter("*"))
 async def hisobot_kassa(message: types.Message, state: FSMContext):
     conn = sqlite3.connect(DB_FILE)
@@ -300,9 +370,9 @@ async def hisobot_kassa(message: types.Message, state: FSMContext):
     matn = (
         f"📊 **Kassa hisoboti:**\n\n"
         f"🐰 Tirik quyonlar: {tirik[0] or 0} ta\n"
-        f"💰 Tushum: +{sotuv:,.0f} so'm\n"
-        f"🌾 Rasxod: -{rasxod:,.0f} so'm\n"
-        f"📈 Sof foyda: {(sotuv - rasxod):,.0f} so'm"
+        f"💰 Jami sotuv: +{sotuv:,.0f} so'm\n"
+        f"🌾 Jami rasxod: -{rasxod:,.0f} so'm\n"
+        f"📈 Sof kassa: {(sotuv - rasxod):,.0f} so'm"
     )
     await message.answer(matn, reply_markup=asosiy_menyu(), parse_mode="Markdown")
 
@@ -314,7 +384,7 @@ async def quyonlar_royxat(message: types.Message, state: FSMContext):
     rows = c.fetchall()
     conn.close()
     if not rows:
-        await message.answer("Hozircha quyon yo'q.", reply_markup=asosiy_menyu())
+        await message.answer("Hozircha tirik quyon yo'q.", reply_markup=asosiy_menyu())
         return
     txt = "🐰 **Tirik quyonlar:**\n\n" + "\n".join([f"• `{r[0]}` — {r[1]} ({r[2]})" for r in rows[:30]])
     await message.answer(txt, reply_markup=asosiy_menyu(), parse_mode="Markdown")
@@ -326,7 +396,7 @@ async def ai_handler(request):
         savol = data.get("savol", "").strip()
         if not savol:
             return web.json_response({"status": "error", "message": "Savol kiritilmadi"}, status=400)
-        prompt = f"Sen quyonchilik veterinari mutaxassisissan. Aniq tavsiya ber: {savol}"
+        prompt = f"Sen quyonchilik veterinari mutaxassisissan. Qisqa va aniq tavsiya ber: {savol}"
         response = ai_model.generate_content(prompt)
         return web.json_response({"status": "ok", "javob": response.text})
     except Exception as e:
@@ -354,15 +424,16 @@ async def start_server():
     cors = aiohttp_cors.setup(app, defaults={"*": aiohttp_cors.ResourceOptions(allow_credentials=True, expose_headers="*", allow_headers="*")})
     cors.add(cors.add(app.router.add_resource("/api/sync")).add_route("POST", sync_handler))
     cors.add(cors.add(app.router.add_resource("/api/ai")).add_route("POST", ai_handler))
+    port = int(os.environ.get("PORT", 8080))
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
 async def main():
     init_db()
     await start_server()
-    print("Ishxona kompyuterida bot va server 8080-portda ishga tushdi...")
+    print("Bot va server ishga tushdi...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
